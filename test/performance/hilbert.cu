@@ -27,6 +27,28 @@
 #include "cstone/sfc/sfc_gpu.h"
 
 #include "timing.cuh"
+#ifdef CSTONE_HAVE_NVTX
+#include <nvtx3/nvToolsExt.h>
+const uint32_t colors[] = { 0xff00ff00, 0xff0000ff, 0xffffff00, 0xffff00ff, 0xff00ffff, 0xffff0000, 0xffffffff };
+const int num_colors = sizeof(colors)/sizeof(uint32_t);
+
+#define PUSH_RANGE(name,cid) { \
+    int color_id = cid; \
+    color_id = color_id%num_colors;\
+    nvtxEventAttributes_t eventAttrib = {0}; \
+    eventAttrib.version = NVTX_VERSION; \
+    eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE; \
+    eventAttrib.colorType = NVTX_COLOR_ARGB; \
+    eventAttrib.color = colors[color_id]; \
+    eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII; \
+    eventAttrib.message.ascii = name; \
+    nvtxRangePushEx(&eventAttrib); \
+}
+#define POP_RANGE nvtxRangePop();
+#else
+#define PUSH_RANGE(name,cid)
+#define POP_RANGE
+#endif
 
 using namespace cstone;
 
@@ -64,7 +86,8 @@ decodeSfcKeys(cudaStream_t stream, const KeyType* keys, unsigned* x, unsigned* y
 int main()
 {
     using IntegerType = uint64_t;
-    unsigned numKeys  = 32000000;
+    // unsigned numKeys  = 32000000;
+    unsigned numKeys  = 32000;
 
     using Real = double;
     Box<Real> box(-1, 1);
@@ -73,6 +96,8 @@ int main()
     std::uniform_real_distribution<Real> distribution(box.xmin(), box.xmax());
     auto getRand = [&distribution, &gen]() { return distribution(gen); };
 
+    // nvtxRangePushA("1_generate");
+    PUSH_RANGE("0_generate", 0)
     std::vector<Real> x(numKeys);
     std::vector<Real> y(numKeys);
     std::vector<Real> z(numKeys);
@@ -83,22 +108,28 @@ int main()
 
     thrust::device_vector<MortonKey<IntegerType>> mortonKeys(numKeys);
     thrust::device_vector<HilbertKey<IntegerType>> hilbertKeys(numKeys);
+    POP_RANGE
+    // nvtxRangePop();
 
     {
         std::vector<unsigned> ix(numKeys);
         std::vector<unsigned> iy(numKeys);
         std::vector<unsigned> iz(numKeys);
 
+        PUSH_RANGE("1_toNBitInt", 1)
         auto normIntX = [&box](Real a) { return toNBitInt<IntegerType>(normalize(a, box.xmin(), box.xmax())); };
         auto normIntY = [&box](Real a) { return toNBitInt<IntegerType>(normalize(a, box.ymin(), box.ymax())); };
         auto normIntZ = [&box](Real a) { return toNBitInt<IntegerType>(normalize(a, box.zmin(), box.zmax())); };
         std::transform(begin(x), end(x), begin(ix), normIntX);
         std::transform(begin(y), end(y), begin(iy), normIntY);
         std::transform(begin(z), end(z), begin(iz), normIntZ);
+        POP_RANGE
 
+        PUSH_RANGE("2_thrust", 2)
         thrust::device_vector<unsigned> dx = ix;
         thrust::device_vector<unsigned> dy = iy;
         thrust::device_vector<unsigned> dz = iz;
+        POP_RANGE
 
         auto computeHilbert = [&](cudaStream_t stream)
         { computeSfcKeys(stream, rawPtr(hilbertKeys), rawPtr(dx), rawPtr(dy), rawPtr(dz), numKeys); };
@@ -106,9 +137,14 @@ int main()
         auto computeMorton = [&](cudaStream_t stream)
         { computeSfcKeys(stream, rawPtr(mortonKeys), rawPtr(dx), rawPtr(dy), rawPtr(dz), numKeys); };
 
+        PUSH_RANGE("3_computeHilbert", 3)
         float t_hilbert = timeGpu(computeHilbert);
-        float t_morton  = timeGpu(computeMorton);
         std::cout << "compute time for " << numKeys << " hilbert keys: " << t_hilbert / 1000 << " s" << std::endl;
+        POP_RANGE
+
+        return 0;
+
+        float t_morton  = timeGpu(computeMorton);
         std::cout << "compute time for " << numKeys << " morton keys: " << t_morton / 1000 << " s" << std::endl;
 
         thrust::device_vector<unsigned> dx2(numKeys);

@@ -35,6 +35,11 @@ if(GPU_DIRECT)
     set(CSTONE_WITH_GPU_AWARE_MPI ON)
 endif()
 
+option(CSTONE_WITH_NVTX "Enable NVIDIA NVTX profiling annotations" OFF)
+if(CSTONE_WITH_NVTX AND NOT CSTONE_WITH_CUDA)
+    message(FATAL_ERROR "CSTONE_WITH_NVTX requires CSTONE_WITH_CUDA=ON")
+endif()
+
 if(CSTONE_WITH_CUDA)
     check_language(CUDA)
     if(CMAKE_CUDA_COMPILER)
@@ -47,6 +52,26 @@ if(CSTONE_WITH_CUDA)
         message(STATUS "No CUDA support")
         set(CSTONE_WITH_CUDA OFF)
     endif()
+endif()
+
+if(CSTONE_WITH_NVTX)
+    if(NOT CUDAToolkit_FOUND)
+        message(FATAL_ERROR "CSTONE_WITH_NVTX requires the CUDA toolkit")
+    endif()
+
+    # CMake 3.22 minimum does not provide CUDA::nvtx3 (added in 3.25),
+    # so add the toolkit include path directly.
+    find_file(CSTONE_NVTX3_HEADER nvtx3/nvToolsExt.h
+              PATHS ${CUDAToolkit_INCLUDE_DIRS}
+              NO_DEFAULT_PATH)
+
+    if(NOT CSTONE_NVTX3_HEADER)
+        message(FATAL_ERROR "CSTONE_WITH_NVTX requested but <nvtx3/nvToolsExt.h> not found")
+    endif()
+
+    add_library(cstone_nvtx_incl INTERFACE)
+    target_include_directories(cstone_nvtx_incl INTERFACE ${CUDAToolkit_INCLUDE_DIRS})
+    target_compile_definitions(cstone_nvtx_incl INTERFACE CSTONE_HAVE_NVTX)
 endif()
 
 # interface target with just the THRUST and CUB includes, as linking those targets adds
